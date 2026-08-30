@@ -292,7 +292,7 @@ class DatabaseService {
 
   // --- AUTOMATIC & MANUAL SUPABASE SEEDING ---
   async seedSupabaseData(force = false) {
-    if (!this.isCloud) return;
+    if (!this.isCloud) return { success: false, message: 'Running in LocalStorage mode.' };
     try {
       const { data: existingStudents } = await supabase.from('students').select('student_record_no');
       
@@ -379,8 +379,9 @@ class DatabaseService {
           });
         }
 
-        return { success: true, message: 'Database populated with initial demo records!' };
+        return { success: true, message: 'Supabase database populated with initial demo records!' };
       }
+      return { success: true, message: 'Database already contains records.' };
     } catch (e) {
       console.warn('Auto-seed error:', e);
       return { success: false, message: e.message };
@@ -704,34 +705,8 @@ class DatabaseService {
 
   // --- FILTER ENGINE ---
   async calculateMatchingStudents(filters) {
-    if (this.isCloud) {
-      const students = await this.getAllStudents();
-      if (!students) return { count: 0, matchingStudents: [] };
-
-      if (filters.isSchoolWide) {
-        return { count: students.length, matchingStudents: students };
-      }
-
-      const matching = students.filter(student => {
-        if (filters.classes && filters.classes.length > 0 && !filters.classes.includes(student.class)) return false;
-        if (filters.sections && filters.sections.length > 0 && !filters.sections.includes(student.section)) return false;
-        if (filters.streams && filters.streams.length > 0 && !filters.streams.includes(student.stream)) return false;
-        if (filters.houses && filters.houses.length > 0 && !filters.houses.includes(student.house)) return false;
-        
-        if (filters.optionalSubject && filters.optionalSubject.trim() !== '') {
-          const targetOpt = filters.optionalSubject.trim().toLowerCase();
-          const opt1Matches = (student.optionalSubject1 || student.optional_subject1 || '').toLowerCase() === targetOpt;
-          const opt2Matches = (student.optionalSubject2 || student.optional_subject2 || '').toLowerCase() === targetOpt;
-          if (!opt1Matches && !opt2Matches) return false;
-        }
-        return true;
-      });
-
-      return { count: matching.length, matchingStudents: matching };
-    }
-
-    this.reload();
-    const students = this.db.students;
+    const students = await this.getAllStudents();
+    if (!students) return { count: 0, matchingStudents: [] };
 
     if (filters.isSchoolWide) {
       return { count: students.length, matchingStudents: students };
@@ -984,34 +959,36 @@ class DatabaseService {
     XLSX.writeFile(wb, 'CampusCast_Data.xlsx');
   }
 
-  // GETTERS (SUPABASE & LOCALSTORAGE DUAL SUPPORT)
+  // GETTERS (SUPABASE & LOCALSTORAGE DUAL SUPPORT WITH FALLBACK SAFETY)
   async getAllStudents() {
     if (this.isCloud) {
-      let { data } = await supabase.from('students').select('*');
-      if (!data || data.length === 0) {
+      let { data, error } = await supabase.from('students').select('*');
+      if (error || !data || data.length === 0) {
         await this.seedSupabaseData(true);
         const res = await supabase.from('students').select('*');
         data = res.data || [];
       }
-      return data.map(s => ({
-        studentRecordNo: s.student_record_no,
-        name: s.name,
-        class: s.class,
-        section: s.section,
-        stream: s.stream,
-        house: s.house,
-        subject1: s.subject1,
-        subject2: s.subject2,
-        subject3: s.subject3,
-        subject4: s.subject4,
-        subject5: s.subject5,
-        optionalSubject1: s.optional_subject1,
-        optionalSubject2: s.optional_subject2,
-        credentialStatus: s.credential_status,
-        accountStatus: s.account_status,
-        generatedId: s.generated_id,
-        generatedPassword: s.generated_password
-      }));
+      if (data && data.length > 0) {
+        return data.map(s => ({
+          studentRecordNo: s.student_record_no,
+          name: s.name,
+          class: s.class,
+          section: s.section,
+          stream: s.stream,
+          house: s.house,
+          subject1: s.subject1,
+          subject2: s.subject2,
+          subject3: s.subject3,
+          subject4: s.subject4,
+          subject5: s.subject5,
+          optionalSubject1: s.optional_subject1,
+          optionalSubject2: s.optional_subject2,
+          credentialStatus: s.credential_status,
+          accountStatus: s.account_status,
+          generatedId: s.generated_id,
+          generatedPassword: s.generated_password
+        }));
+      }
     }
     this.reload();
     return this.db.students;
@@ -1025,18 +1002,20 @@ class DatabaseService {
         const res = await supabase.from('teachers').select('*');
         data = res.data || [];
       }
-      return data.map(t => ({
-        teacherRecordNo: t.teacher_record_no,
-        name: t.name,
-        department: t.department,
-        subjectsTaught: t.subjects_taught || [],
-        authorizedClasses: t.authorized_classes || [],
-        authorizedSections: t.authorized_sections || [],
-        credentialStatus: t.credential_status,
-        accountStatus: t.account_status,
-        generatedId: t.generated_id,
-        generatedPassword: t.generated_password
-      }));
+      if (data && data.length > 0) {
+        return data.map(t => ({
+          teacherRecordNo: t.teacher_record_no,
+          name: t.name,
+          department: t.department,
+          subjectsTaught: t.subjects_taught || [],
+          authorizedClasses: t.authorized_classes || [],
+          authorizedSections: t.authorized_sections || [],
+          credentialStatus: t.credential_status,
+          accountStatus: t.account_status,
+          generatedId: t.generated_id,
+          generatedPassword: t.generated_password
+        }));
+      }
     }
     this.reload();
     return this.db.teachers;
@@ -1050,15 +1029,17 @@ class DatabaseService {
         const res = await supabase.from('credentials').select('*');
         data = res.data || [];
       }
-      return data.map(c => ({
-        recordNo: c.record_no,
-        personName: c.person_name,
-        role: c.role,
-        generatedId: c.generated_id,
-        generatedPassword: c.generated_password,
-        generatedOn: c.generated_on,
-        status: c.status
-      }));
+      if (data && data.length > 0) {
+        return data.map(c => ({
+          recordNo: c.record_no,
+          personName: c.person_name,
+          role: c.role,
+          generatedId: c.generated_id,
+          generatedPassword: c.generated_password,
+          generatedOn: c.generated_on,
+          status: c.status
+        }));
+      }
     }
     this.reload();
     return this.db.credentials;
@@ -1067,19 +1048,21 @@ class DatabaseService {
   async getAllMessages() {
     if (this.isCloud) {
       const { data } = await supabase.from('messages').select('*').order('created_at', { ascending: false });
-      return (data || []).map(m => ({
-        id: m.id,
-        senderId: m.sender_id,
-        senderName: m.sender_name,
-        senderRole: m.sender_role,
-        title: m.title,
-        content: m.content,
-        category: m.category,
-        eventDate: m.event_date,
-        eventLocation: m.event_location,
-        createdAt: m.created_at,
-        targetFilters: m.target_filters
-      }));
+      if (data && data.length > 0) {
+        return data.map(m => ({
+          id: m.id,
+          senderId: m.sender_id,
+          senderName: m.sender_name,
+          senderRole: m.sender_role,
+          title: m.title,
+          content: m.content,
+          category: m.category,
+          eventDate: m.event_date,
+          eventLocation: m.event_location,
+          createdAt: m.created_at,
+          targetFilters: m.target_filters
+        }));
+      }
     }
     this.reload();
     return this.db.messages;
@@ -1088,11 +1071,8 @@ class DatabaseService {
   async getAdminAccount() {
     if (this.isCloud) {
       const { data } = await supabase.from('admin_account').select('*').maybeSingle();
-      if (!data) {
-        await this.seedSupabaseData(true);
-        return { id: 'ADM-001', password: 'admin123' };
-      }
-      return data;
+      if (data) return data;
+      await this.seedSupabaseData(true);
     }
     this.reload();
     return this.db.adminAccount;

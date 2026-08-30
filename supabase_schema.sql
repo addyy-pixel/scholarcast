@@ -91,13 +91,29 @@ CREATE TABLE event_registrations (
   registered_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 8. DISABLE RLS / ALLOW PUBLIC ACCESS FOR QUICK START PROTOTYPING
-ALTER TABLE admin_account DISABLE ROW LEVEL SECURITY;
-ALTER TABLE students DISABLE ROW LEVEL SECURITY;
-ALTER TABLE teachers DISABLE ROW LEVEL SECURITY;
-ALTER TABLE credentials DISABLE ROW LEVEL SECURITY;
-ALTER TABLE messages DISABLE ROW LEVEL SECURITY;
-ALTER TABLE event_registrations DISABLE ROW LEVEL SECURITY;
+-- 8. ENABLE RLS AND GRANT PUBLIC ACCESS POLICIES
+ALTER TABLE admin_account ENABLE ROW LEVEL SECURITY;
+ALTER TABLE students ENABLE ROW LEVEL SECURITY;
+ALTER TABLE teachers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE credentials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE event_registrations ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public all on admin_account" ON admin_account;
+DROP POLICY IF EXISTS "Allow public all on students" ON students;
+DROP POLICY IF EXISTS "Allow public all on teachers" ON teachers;
+DROP POLICY IF EXISTS "Allow public all on credentials" ON credentials;
+DROP POLICY IF EXISTS "Allow public all on messages" ON messages;
+DROP POLICY IF EXISTS "Allow public all on event_registrations" ON event_registrations;
+
+CREATE POLICY "Allow public all on admin_account" ON admin_account FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow public all on students" ON students FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow public all on teachers" ON teachers FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow public all on credentials" ON credentials FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow public all on messages" ON messages FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow public all on event_registrations" ON event_registrations FOR ALL USING (true) WITH CHECK (true);
+
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, postgres, service_role;
 
 -- 9. ENABLE SUPABASE REALTIME FOR LIVE BROADCAST NOTIFICATIONS
 BEGIN;
