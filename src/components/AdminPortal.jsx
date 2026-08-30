@@ -349,6 +349,18 @@ export default function AdminPortal({ onOpenUserApp }) {
 
             <div className="flex items-center space-x-3">
               <button
+                onClick={async () => {
+                  await dbService.seedSupabaseData(true);
+                  loadData();
+                }}
+                className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl text-xs shadow transition-all"
+                title="Populate/Restore demo student and teacher records into Supabase"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Seed Demo Records</span>
+              </button>
+
+              <button
                 onClick={handleExportExcel}
                 className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs shadow transition-all"
                 title="Download CampusCast_Data.xlsx"

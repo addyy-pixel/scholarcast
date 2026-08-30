@@ -258,7 +258,7 @@ class DatabaseService {
     this.isCloud = isSupabaseConfigured;
     this.initLocal();
     if (this.isCloud) {
-      this.seedSupabaseIfEmpty();
+      this.seedSupabaseData();
     }
   }
 
@@ -290,12 +290,15 @@ class DatabaseService {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(this.db));
   }
 
-  // --- SELF HEALING AUTOMATIC SUPABASE SEEDING ---
-  async seedSupabaseIfEmpty() {
+  // --- AUTOMATIC & MANUAL SUPABASE SEEDING ---
+  async seedSupabaseData(force = false) {
+    if (!this.isCloud) return;
     try {
-      const { data: existingAdmin } = await supabase.from('admin_account').select('id').maybeSingle();
-      if (!existingAdmin) {
-        console.log('Seeding default data into Supabase Database...');
+      const { data: existingStudents } = await supabase.from('students').select('student_record_no');
+      
+      if (force || !existingStudents || existingStudents.length === 0) {
+        console.log('Seeding initial student & teacher records into Supabase PostgreSQL...');
+
         await supabase.from('admin_account').upsert({ id: 'ADM-001', name: 'Dr. Vinod Rana (School Principal / Admin)', password: 'admin123' });
 
         for (const s of INITIAL_MASTER_DB.students) {
@@ -375,9 +378,12 @@ class DatabaseService {
             registered_at: r.registeredAt
           });
         }
+
+        return { success: true, message: 'Database populated with initial demo records!' };
       }
     } catch (e) {
       console.warn('Auto-seed error:', e);
+      return { success: false, message: e.message };
     }
   }
 
@@ -396,14 +402,14 @@ class DatabaseService {
         return { success: true, user: { ...data, role: 'admin' } };
       }
 
-      // Self-healing fallback: If ADM-001 / admin123 is attempted, auto-insert into Supabase
       if (idTrim.toUpperCase() === 'ADM-001' && password === 'admin123') {
         const defaultAdmin = { id: 'ADM-001', name: 'Dr. Vinod Rana (School Principal / Admin)', password: 'admin123' };
         await supabase.from('admin_account').upsert(defaultAdmin);
+        await this.seedSupabaseData(true);
         return { success: true, user: { ...defaultAdmin, role: 'admin' } };
       }
 
-      return { success: false, message: 'Invalid Admin Credentials in Supabase.' };
+      return { success: false, message: 'Invalid Admin Credentials.' };
     }
 
     this.reload();
@@ -443,17 +449,14 @@ class DatabaseService {
       }
 
       // Check Credentials ledger
-      const { data: cred } = await supabase.from('credentials').select('*').ilike('generated_id', idClean).maybeSingle();
+      let { data: cred } = await supabase.from('credentials').select('*').ilike('generated_id', idClean).maybeSingle();
       if (!cred) {
-        // Fallback check against local seed data
-        const localCheck = INITIAL_MASTER_DB.credentials.find(c => c.generatedId.toUpperCase() === idClean.toUpperCase());
-        if (localCheck && localCheck.generatedPassword === password) {
-          // Auto-sync seed credentials into Supabase on demand!
-          await this.seedSupabaseIfEmpty();
-          return this.loginWithRoleDetection(generatedId, password);
-        }
-        return { success: false, message: `Invalid Credentials. No account found with ID "${generatedId}".` };
+        await this.seedSupabaseData(true);
+        const retry = await supabase.from('credentials').select('*').ilike('generated_id', idClean).maybeSingle();
+        cred = retry.data;
       }
+
+      if (!cred) return { success: false, message: `Invalid Credentials. No account found with ID "${generatedId}".` };
       if (cred.status !== 'Active') return { success: false, message: 'Account credential has been revoked by Administration.' };
       if (cred.generated_password !== password) return { success: false, message: 'Incorrect Password.' };
 
@@ -702,7 +705,7 @@ class DatabaseService {
   // --- FILTER ENGINE ---
   async calculateMatchingStudents(filters) {
     if (this.isCloud) {
-      const { data: students } = await supabase.from('students').select('*');
+      const students = await this.getAllStudents();
       if (!students) return { count: 0, matchingStudents: [] };
 
       if (filters.isSchoolWide) {
@@ -717,8 +720,8 @@ class DatabaseService {
         
         if (filters.optionalSubject && filters.optionalSubject.trim() !== '') {
           const targetOpt = filters.optionalSubject.trim().toLowerCase();
-          const opt1Matches = (student.optional_subject1 || '').toLowerCase() === targetOpt;
-          const opt2Matches = (student.optional_subject2 || '').toLowerCase() === targetOpt;
+          const opt1Matches = (student.optionalSubject1 || student.optional_subject1 || '').toLowerCase() === targetOpt;
+          const opt2Matches = (student.optionalSubject2 || student.optional_subject2 || '').toLowerCase() === targetOpt;
           if (!opt1Matches && !opt2Matches) return false;
         }
         return true;
@@ -798,7 +801,7 @@ class DatabaseService {
     const idClean = (generatedStudentId || '').trim();
 
     if (this.isCloud) {
-      const { data: student } = await supabase.from('students').select('*').or(`generated_id.ilike.${idClean},student_record_no.ilike.${idClean}`).maybeSingle();
+      let { data: student } = await supabase.from('students').select('*').or(`generated_id.ilike.${idClean},student_record_no.ilike.${idClean}`).maybeSingle();
       if (!student) return [];
 
       const { data: messages } = await supabase.from('messages').select('*').order('created_at', { ascending: false });
@@ -935,7 +938,7 @@ class DatabaseService {
     return this.db.eventRegistrations.filter(r => r.eventId === eventId);
   }
 
-  // --- EXCEL ---
+  // --- EXCEL IMPORT & EXPORT ---
   async exportToExcel() {
     const students = await this.getAllStudents();
     const teachers = await this.getAllTeachers();
@@ -986,7 +989,7 @@ class DatabaseService {
     if (this.isCloud) {
       let { data } = await supabase.from('students').select('*');
       if (!data || data.length === 0) {
-        await this.seedSupabaseIfEmpty();
+        await this.seedSupabaseData(true);
         const res = await supabase.from('students').select('*');
         data = res.data || [];
       }
@@ -1018,7 +1021,7 @@ class DatabaseService {
     if (this.isCloud) {
       let { data } = await supabase.from('teachers').select('*');
       if (!data || data.length === 0) {
-        await this.seedSupabaseIfEmpty();
+        await this.seedSupabaseData(true);
         const res = await supabase.from('teachers').select('*');
         data = res.data || [];
       }
@@ -1043,7 +1046,7 @@ class DatabaseService {
     if (this.isCloud) {
       let { data } = await supabase.from('credentials').select('*');
       if (!data || data.length === 0) {
-        await this.seedSupabaseIfEmpty();
+        await this.seedSupabaseData(true);
         const res = await supabase.from('credentials').select('*');
         data = res.data || [];
       }
@@ -1086,7 +1089,7 @@ class DatabaseService {
     if (this.isCloud) {
       const { data } = await supabase.from('admin_account').select('*').maybeSingle();
       if (!data) {
-        await this.seedSupabaseIfEmpty();
+        await this.seedSupabaseData(true);
         return { id: 'ADM-001', password: 'admin123' };
       }
       return data;
