@@ -438,40 +438,29 @@ class DatabaseService {
     return { success: true, adminAccount: this.db.adminAccount, message: 'Admin login credentials updated successfully!' };
   }
 
-  // --- UNIFIED USER LOGIN (ROLE DETECTION) ---
+  // --- UNIFIED USER LOGIN (MULTI-FALLBACK ROLE DETECTION) ---
   async loginWithRoleDetection(generatedId, password) {
     const idClean = generatedId.trim();
 
     if (this.isCloud) {
-      // Check Admin
+      // 1. Check Admin Account
       const { data: adminData } = await supabase.from('admin_account').select('*').ilike('id', idClean).maybeSingle();
       if (adminData && adminData.password === password) {
         return { success: true, role: 'admin', user: { ...adminData, role: 'admin' } };
       }
 
-      // Check Credentials ledger
+      // 2. Check Credentials ledger
       let { data: cred } = await supabase.from('credentials').select('*').ilike('generated_id', idClean).maybeSingle();
-      if (!cred) {
-        await this.seedSupabaseData(true);
-        const retry = await supabase.from('credentials').select('*').ilike('generated_id', idClean).maybeSingle();
-        cred = retry.data;
-      }
 
-      if (!cred) return { success: false, message: `Invalid Credentials. No account found with ID "${generatedId}".` };
-      if (cred.status !== 'Active') return { success: false, message: 'Account credential has been revoked by Administration.' };
-      if (cred.generated_password !== password) return { success: false, message: 'Incorrect Password.' };
+      // 3. Direct Student Check
+      let { data: student } = await supabase.from('students').select('*').or(`generated_id.ilike.${idClean},student_record_no.ilike.${idClean}`).maybeSingle();
 
-      if (cred.role.toLowerCase() === 'student') {
-        let { data: student } = await supabase.from('students').select('*').ilike('generated_id', idClean).maybeSingle();
-        if (!student) {
-          student = await supabase.from('students').select('*').ilike('student_record_no', cred.record_no).maybeSingle();
-        }
-        if (!student) return { success: false, message: 'Student database record missing in Supabase.' };
+      if (student && (student.generated_password === password || (!cred && INITIAL_MASTER_DB.students.some(s => s.generatedId.toUpperCase() === idClean.toUpperCase() && s.generatedPassword === password)))) {
         return {
           success: true,
           role: 'student',
           user: {
-            id: cred.generated_id,
+            id: student.generated_id || idClean,
             recordNo: student.student_record_no,
             name: student.name,
             role: 'student',
@@ -488,17 +477,17 @@ class DatabaseService {
             optionalSubject2: student.optional_subject2
           }
         };
-      } else if (cred.role.toLowerCase() === 'teacher') {
-        let { data: teacher } = await supabase.from('teachers').select('*').ilike('generated_id', idClean).maybeSingle();
-        if (!teacher) {
-          teacher = await supabase.from('teachers').select('*').ilike('teacher_record_no', cred.record_no).maybeSingle();
-        }
-        if (!teacher) return { success: false, message: 'Teacher database record missing in Supabase.' };
+      }
+
+      // 4. Direct Teacher Check
+      let { data: teacher } = await supabase.from('teachers').select('*').or(`generated_id.ilike.${idClean},teacher_record_no.ilike.${idClean}`).maybeSingle();
+
+      if (teacher && (teacher.generated_password === password || (!cred && INITIAL_MASTER_DB.teachers.some(t => t.generatedId.toUpperCase() === idClean.toUpperCase() && t.generatedPassword === password)))) {
         return {
           success: true,
           role: 'teacher',
           user: {
-            id: cred.generated_id,
+            id: teacher.generated_id || idClean,
             recordNo: teacher.teacher_record_no,
             name: teacher.name,
             role: 'teacher',
@@ -509,63 +498,156 @@ class DatabaseService {
           }
         };
       }
+
+      // 5. If credentials found in cred table, validate password
+      if (cred) {
+        if (cred.status !== 'Active') return { success: false, message: 'Account credential has been revoked by Administration.' };
+        if (cred.generated_password !== password) return { success: false, message: 'Incorrect Password.' };
+
+        if (cred.role.toLowerCase() === 'student' && student) {
+          return {
+            success: true,
+            role: 'student',
+            user: {
+              id: cred.generated_id,
+              recordNo: student.student_record_no,
+              name: student.name,
+              role: 'student',
+              class: student.class,
+              section: student.section,
+              stream: student.stream,
+              house: student.house,
+              subject1: student.subject1,
+              subject2: student.subject2,
+              subject3: student.subject3,
+              subject4: student.subject4,
+              subject5: student.subject5,
+              optionalSubject1: student.optional_subject1,
+              optionalSubject2: student.optional_subject2
+            }
+          };
+        } else if (cred.role.toLowerCase() === 'teacher' && teacher) {
+          return {
+            success: true,
+            role: 'teacher',
+            user: {
+              id: cred.generated_id,
+              recordNo: teacher.teacher_record_no,
+              name: teacher.name,
+              role: 'teacher',
+              department: teacher.department,
+              subjectsTaught: teacher.subjects_taught || [],
+              authorizedClasses: teacher.authorized_classes || [],
+              authorizedSections: teacher.authorized_sections || []
+            }
+          };
+        }
+      }
+
+      // Auto Seed Attempt if still not found
+      await this.seedSupabaseData(true);
     }
 
-    // Local Storage Fallback
+    // Local Seed Master Fallback
     this.reload();
     if (idClean.toUpperCase() === this.db.adminAccount.id.toUpperCase() && password === this.db.adminAccount.password) {
       return { success: true, role: 'admin', user: { ...this.db.adminAccount, role: 'admin' } };
     }
 
     const cred = this.db.credentials.find(c => (c.generatedId || '').toUpperCase() === idClean.toUpperCase());
-    if (!cred) return { success: false, message: `Invalid Credentials. No account found with ID "${generatedId}".` };
-    if (cred.status !== 'Active') return { success: false, message: 'Account credential has been revoked by Administration.' };
-    if (cred.generatedPassword !== password) return { success: false, message: 'Incorrect Password.' };
+    if (cred) {
+      if (cred.status !== 'Active') return { success: false, message: 'Account credential has been revoked by Administration.' };
+      if (cred.generatedPassword !== password) return { success: false, message: 'Incorrect Password.' };
 
-    if (cred.role.toLowerCase() === 'student') {
-      const student = this.db.students.find(s => s.studentRecordNo === cred.recordNo || (s.generatedId || '').toUpperCase() === idClean.toUpperCase());
-      if (!student) return { success: false, message: 'Student database record missing.' };
+      if (cred.role.toLowerCase() === 'student') {
+        const student = this.db.students.find(s => s.studentRecordNo === cred.recordNo || (s.generatedId || '').toUpperCase() === idClean.toUpperCase());
+        if (!student) return { success: false, message: 'Student database record missing.' };
+        return {
+          success: true,
+          role: 'student',
+          user: {
+            id: cred.generatedId,
+            recordNo: student.studentRecordNo,
+            name: student.name,
+            role: 'student',
+            class: student.class,
+            section: student.section,
+            stream: student.stream,
+            house: student.house,
+            subject1: student.subject1,
+            subject2: student.subject2,
+            subject3: student.subject3,
+            subject4: student.subject4,
+            subject5: student.subject5,
+            optionalSubject1: student.optionalSubject1,
+            optionalSubject2: student.optionalSubject2
+          }
+        };
+      } else if (cred.role.toLowerCase() === 'teacher') {
+        const teacher = this.db.teachers.find(t => t.teacherRecordNo === cred.recordNo || (t.generatedId || '').toUpperCase() === idClean.toUpperCase());
+        if (!teacher) return { success: false, message: 'Teacher database record missing.' };
+        return {
+          success: true,
+          role: 'teacher',
+          user: {
+            id: cred.generatedId,
+            recordNo: teacher.teacherRecordNo,
+            name: teacher.name,
+            role: 'teacher',
+            department: teacher.department,
+            subjectsTaught: teacher.subjectsTaught,
+            authorizedClasses: teacher.authorizedClasses,
+            authorizedSections: teacher.authorizedSections
+          }
+        };
+      }
+    }
+
+    // Direct INITIAL_MASTER_DB Fallback for quick fill demo accounts
+    const initialStudent = INITIAL_MASTER_DB.students.find(s => s.generatedId.toUpperCase() === idClean.toUpperCase());
+    if (initialStudent && initialStudent.generatedPassword === password) {
       return {
         success: true,
         role: 'student',
         user: {
-          id: cred.generatedId,
-          recordNo: student.studentRecordNo,
-          name: student.name,
+          id: initialStudent.generatedId,
+          recordNo: initialStudent.studentRecordNo,
+          name: initialStudent.name,
           role: 'student',
-          class: student.class,
-          section: student.section,
-          stream: student.stream,
-          house: student.house,
-          subject1: student.subject1,
-          subject2: student.subject2,
-          subject3: student.subject3,
-          subject4: student.subject4,
-          subject5: student.subject5,
-          optionalSubject1: student.optionalSubject1,
-          optionalSubject2: student.optionalSubject2
-        }
-      };
-    } else if (cred.role.toLowerCase() === 'teacher') {
-      const teacher = this.db.teachers.find(t => t.teacherRecordNo === cred.recordNo || (t.generatedId || '').toUpperCase() === idClean.toUpperCase());
-      if (!teacher) return { success: false, message: 'Teacher database record missing.' };
-      return {
-        success: true,
-        role: 'teacher',
-        user: {
-          id: cred.generatedId,
-          recordNo: teacher.teacherRecordNo,
-          name: teacher.name,
-          role: 'teacher',
-          department: teacher.department,
-          subjectsTaught: teacher.subjectsTaught,
-          authorizedClasses: teacher.authorizedClasses,
-          authorizedSections: teacher.authorizedSections
+          class: initialStudent.class,
+          section: initialStudent.section,
+          stream: initialStudent.stream,
+          house: initialStudent.house,
+          subject1: initialStudent.subject1,
+          subject2: initialStudent.subject2,
+          subject3: initialStudent.subject3,
+          subject4: initialStudent.subject4,
+          subject5: initialStudent.subject5,
+          optionalSubject1: initialStudent.optionalSubject1,
+          optionalSubject2: initialStudent.optionalSubject2
         }
       };
     }
 
-    return { success: false, message: 'Role detection failed.' };
+    const initialTeacher = INITIAL_MASTER_DB.teachers.find(t => t.generatedId.toUpperCase() === idClean.toUpperCase());
+    if (initialTeacher && initialTeacher.generatedPassword === password) {
+      return {
+        success: true,
+        role: 'teacher',
+        user: {
+          id: initialTeacher.generatedId,
+          recordNo: initialTeacher.teacherRecordNo,
+          name: initialTeacher.name,
+          role: 'teacher',
+          department: initialTeacher.department,
+          subjectsTaught: initialTeacher.subjectsTaught,
+          authorizedClasses: initialTeacher.authorizedClasses,
+          authorizedSections: initialTeacher.authorizedSections
+        }
+      };
+    }
+
+    return { success: false, message: `Invalid Credentials. No account found with ID "${generatedId}".` };
   }
 
   // --- CREDENTIAL GENERATION ---
