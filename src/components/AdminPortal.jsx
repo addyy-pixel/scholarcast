@@ -341,8 +341,12 @@ export default function AdminPortal({ onOpenUserApp }) {
                 <span className="font-extrabold text-lg sm:text-xl tracking-wider font-serif-header text-white">
                   SCHOLARS HOME ADMIN
                 </span>
-                <span className="ml-2 text-[10px] uppercase font-bold bg-sky-500/20 text-sky-200 border border-sky-400/40 px-2.5 py-0.5 rounded-full">
-                  Master Data Panel
+                <span className={`ml-2 text-[10px] uppercase font-bold px-2.5 py-0.5 rounded-full border ${
+                  dbService.isCloud 
+                    ? 'bg-emerald-500/20 text-emerald-200 border-emerald-400/40' 
+                    : 'bg-amber-500/20 text-amber-200 border-amber-400/40'
+                }`}>
+                  {dbService.isCloud ? '⚡ Supabase Cloud' : '💾 LocalStorage'}
                 </span>
               </div>
             </div>
@@ -350,11 +354,12 @@ export default function AdminPortal({ onOpenUserApp }) {
             <div className="flex items-center space-x-3">
               <button
                 onClick={async () => {
-                  await dbService.seedSupabaseData(true);
-                  loadData();
+                  const res = await dbService.seedSupabaseData(true);
+                  alert(res?.message || 'Demo records populated into database!');
+                  await loadData();
                 }}
                 className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl text-xs shadow transition-all"
-                title="Populate/Restore demo student and teacher records into Supabase"
+                title="Populate/Restore demo student and teacher records into database"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>Seed Demo Records</span>
