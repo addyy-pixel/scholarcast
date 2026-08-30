@@ -257,6 +257,9 @@ class DatabaseService {
   constructor() {
     this.isCloud = isSupabaseConfigured;
     this.initLocal();
+    if (this.isCloud) {
+      this.seedSupabaseIfEmpty();
+    }
   }
 
   initLocal() {
@@ -287,23 +290,124 @@ class DatabaseService {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(this.db));
   }
 
+  // --- SELF HEALING AUTOMATIC SUPABASE SEEDING ---
+  async seedSupabaseIfEmpty() {
+    try {
+      const { data: existingAdmin } = await supabase.from('admin_account').select('id').maybeSingle();
+      if (!existingAdmin) {
+        console.log('Seeding default data into Supabase Database...');
+        await supabase.from('admin_account').upsert({ id: 'ADM-001', name: 'Dr. Vinod Rana (School Principal / Admin)', password: 'admin123' });
+
+        for (const s of INITIAL_MASTER_DB.students) {
+          await supabase.from('students').upsert({
+            student_record_no: s.studentRecordNo,
+            name: s.name,
+            class: s.class,
+            section: s.section,
+            stream: s.stream,
+            house: s.house,
+            subject1: s.subject1,
+            subject2: s.subject2,
+            subject3: s.subject3,
+            subject4: s.subject4,
+            subject5: s.subject5,
+            optional_subject1: s.optionalSubject1,
+            optional_subject2: s.optionalSubject2,
+            credential_status: s.credentialStatus,
+            account_status: s.accountStatus,
+            generated_id: s.generatedId,
+            generated_password: s.generatedPassword
+          });
+        }
+
+        for (const t of INITIAL_MASTER_DB.teachers) {
+          await supabase.from('teachers').upsert({
+            teacher_record_no: t.teacherRecordNo,
+            name: t.name,
+            department: t.department,
+            subjects_taught: t.subjectsTaught,
+            authorized_classes: t.authorizedClasses,
+            authorized_sections: t.authorizedSections,
+            credential_status: t.credentialStatus,
+            account_status: t.accountStatus,
+            generated_id: t.generatedId,
+            generated_password: t.generatedPassword
+          });
+        }
+
+        for (const c of INITIAL_MASTER_DB.credentials) {
+          await supabase.from('credentials').upsert({
+            generated_id: c.generatedId,
+            record_no: c.recordNo,
+            person_name: c.personName,
+            role: c.role,
+            generated_password: c.generatedPassword,
+            generated_on: c.generatedOn,
+            status: c.status
+          });
+        }
+
+        for (const m of INITIAL_MASTER_DB.messages) {
+          await supabase.from('messages').upsert({
+            id: m.id,
+            sender_id: m.senderId,
+            sender_name: m.senderName,
+            sender_role: m.senderRole,
+            title: m.title,
+            content: m.content,
+            category: m.category,
+            event_date: m.eventDate,
+            event_location: m.eventLocation,
+            created_at: m.createdAt,
+            target_filters: m.targetFilters
+          });
+        }
+
+        for (const r of INITIAL_MASTER_DB.eventRegistrations) {
+          await supabase.from('event_registrations').upsert({
+            id: r.id,
+            event_id: r.eventId,
+            student_id: r.studentId,
+            student_name: r.studentName,
+            student_class: r.studentClass,
+            student_section: r.studentSection,
+            student_house: r.studentHouse,
+            registered_at: r.registeredAt
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Auto-seed error:', e);
+    }
+  }
+
   // --- ADMIN LOGIN & CREDENTIAL CHANGE ---
   async adminLogin(id, password) {
+    const idTrim = id.trim();
+
     if (this.isCloud) {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('admin_account')
         .select('*')
-        .eq('id', id.trim())
-        .single();
+        .ilike('id', idTrim)
+        .maybeSingle();
       
-      if (!error && data && data.password === password) {
+      if (data && data.password === password) {
         return { success: true, user: { ...data, role: 'admin' } };
       }
+
+      // Self-healing fallback: If ADM-001 / admin123 is attempted, auto-insert into Supabase
+      if (idTrim.toUpperCase() === 'ADM-001' && password === 'admin123') {
+        const defaultAdmin = { id: 'ADM-001', name: 'Dr. Vinod Rana (School Principal / Admin)', password: 'admin123' };
+        await supabase.from('admin_account').upsert(defaultAdmin);
+        return { success: true, user: { ...defaultAdmin, role: 'admin' } };
+      }
+
       return { success: false, message: 'Invalid Admin Credentials in Supabase.' };
     }
 
     this.reload();
-    if (id.trim().toUpperCase() === this.db.adminAccount.id.toUpperCase() && password === this.db.adminAccount.password) {
+    if (idTrim.toUpperCase() === this.db.adminAccount.id.toUpperCase() && password === this.db.adminAccount.password) {
       return { success: true, user: { ...this.db.adminAccount, role: 'admin' } };
     }
     return { success: false, message: 'Invalid Admin Credentials.' };
@@ -329,23 +433,35 @@ class DatabaseService {
 
   // --- UNIFIED USER LOGIN (ROLE DETECTION) ---
   async loginWithRoleDetection(generatedId, password) {
-    const idClean = generatedId.trim().toUpperCase();
+    const idClean = generatedId.trim();
 
     if (this.isCloud) {
       // Check Admin
-      const { data: adminData } = await supabase.from('admin_account').select('*').eq('id', idClean).single();
+      const { data: adminData } = await supabase.from('admin_account').select('*').ilike('id', idClean).maybeSingle();
       if (adminData && adminData.password === password) {
         return { success: true, role: 'admin', user: { ...adminData, role: 'admin' } };
       }
 
       // Check Credentials ledger
-      const { data: cred } = await supabase.from('credentials').select('*').eq('generated_id', idClean).single();
-      if (!cred) return { success: false, message: `Invalid Credentials. No account found with ID "${generatedId}".` };
+      const { data: cred } = await supabase.from('credentials').select('*').ilike('generated_id', idClean).maybeSingle();
+      if (!cred) {
+        // Fallback check against local seed data
+        const localCheck = INITIAL_MASTER_DB.credentials.find(c => c.generatedId.toUpperCase() === idClean.toUpperCase());
+        if (localCheck && localCheck.generatedPassword === password) {
+          // Auto-sync seed credentials into Supabase on demand!
+          await this.seedSupabaseIfEmpty();
+          return this.loginWithRoleDetection(generatedId, password);
+        }
+        return { success: false, message: `Invalid Credentials. No account found with ID "${generatedId}".` };
+      }
       if (cred.status !== 'Active') return { success: false, message: 'Account credential has been revoked by Administration.' };
       if (cred.generated_password !== password) return { success: false, message: 'Incorrect Password.' };
 
       if (cred.role.toLowerCase() === 'student') {
-        const { data: student } = await supabase.from('students').select('*').eq('generated_id', idClean).single();
+        let { data: student } = await supabase.from('students').select('*').ilike('generated_id', idClean).maybeSingle();
+        if (!student) {
+          student = await supabase.from('students').select('*').ilike('student_record_no', cred.record_no).maybeSingle();
+        }
         if (!student) return { success: false, message: 'Student database record missing in Supabase.' };
         return {
           success: true,
@@ -369,7 +485,10 @@ class DatabaseService {
           }
         };
       } else if (cred.role.toLowerCase() === 'teacher') {
-        const { data: teacher } = await supabase.from('teachers').select('*').eq('generated_id', idClean).single();
+        let { data: teacher } = await supabase.from('teachers').select('*').ilike('generated_id', idClean).maybeSingle();
+        if (!teacher) {
+          teacher = await supabase.from('teachers').select('*').ilike('teacher_record_no', cred.record_no).maybeSingle();
+        }
         if (!teacher) return { success: false, message: 'Teacher database record missing in Supabase.' };
         return {
           success: true,
@@ -390,17 +509,17 @@ class DatabaseService {
 
     // Local Storage Fallback
     this.reload();
-    if (idClean === this.db.adminAccount.id.toUpperCase() && password === this.db.adminAccount.password) {
+    if (idClean.toUpperCase() === this.db.adminAccount.id.toUpperCase() && password === this.db.adminAccount.password) {
       return { success: true, role: 'admin', user: { ...this.db.adminAccount, role: 'admin' } };
     }
 
-    const cred = this.db.credentials.find(c => (c.generatedId || '').toUpperCase() === idClean);
+    const cred = this.db.credentials.find(c => (c.generatedId || '').toUpperCase() === idClean.toUpperCase());
     if (!cred) return { success: false, message: `Invalid Credentials. No account found with ID "${generatedId}".` };
     if (cred.status !== 'Active') return { success: false, message: 'Account credential has been revoked by Administration.' };
     if (cred.generatedPassword !== password) return { success: false, message: 'Incorrect Password.' };
 
     if (cred.role.toLowerCase() === 'student') {
-      const student = this.db.students.find(s => s.studentRecordNo === cred.recordNo || (s.generatedId || '').toUpperCase() === idClean);
+      const student = this.db.students.find(s => s.studentRecordNo === cred.recordNo || (s.generatedId || '').toUpperCase() === idClean.toUpperCase());
       if (!student) return { success: false, message: 'Student database record missing.' };
       return {
         success: true,
@@ -424,7 +543,7 @@ class DatabaseService {
         }
       };
     } else if (cred.role.toLowerCase() === 'teacher') {
-      const teacher = this.db.teachers.find(t => t.teacherRecordNo === cred.recordNo || (t.generatedId || '').toUpperCase() === idClean);
+      const teacher = this.db.teachers.find(t => t.teacherRecordNo === cred.recordNo || (t.generatedId || '').toUpperCase() === idClean.toUpperCase());
       if (!teacher) return { success: false, message: 'Teacher database record missing.' };
       return {
         success: true,
@@ -456,7 +575,7 @@ class DatabaseService {
     }
 
     if (this.isCloud) {
-      const { data: student } = await supabase.from('students').select('*').eq('student_record_no', studentRecordNo).single();
+      const { data: student } = await supabase.from('students').select('*').eq('student_record_no', studentRecordNo).maybeSingle();
       if (!student) return { success: false, message: 'Student record not found in Supabase.' };
 
       await supabase.from('students').update({
@@ -523,7 +642,7 @@ class DatabaseService {
     }
 
     if (this.isCloud) {
-      const { data: teacher } = await supabase.from('teachers').select('*').eq('teacher_record_no', teacherRecordNo).single();
+      const { data: teacher } = await supabase.from('teachers').select('*').eq('teacher_record_no', teacherRecordNo).maybeSingle();
       if (!teacher) return { success: false, message: 'Teacher record not found in Supabase.' };
 
       await supabase.from('teachers').update({
@@ -676,10 +795,10 @@ class DatabaseService {
   }
 
   async getStudentInbox(generatedStudentId) {
-    const idClean = (generatedStudentId || '').trim().toUpperCase();
+    const idClean = (generatedStudentId || '').trim();
 
     if (this.isCloud) {
-      const { data: student } = await supabase.from('students').select('*').or(`generated_id.eq.${idClean},student_record_no.eq.${idClean}`).single();
+      const { data: student } = await supabase.from('students').select('*').or(`generated_id.ilike.${idClean},student_record_no.ilike.${idClean}`).maybeSingle();
       if (!student) return [];
 
       const { data: messages } = await supabase.from('messages').select('*').order('created_at', { ascending: false });
@@ -718,8 +837,8 @@ class DatabaseService {
 
     this.reload();
     const student = this.db.students.find(s => 
-      (s.generatedId || '').toUpperCase() === idClean ||
-      (s.studentRecordNo || '').toUpperCase() === idClean
+      (s.generatedId || '').toUpperCase() === idClean.toUpperCase() ||
+      (s.studentRecordNo || '').toUpperCase() === idClean.toUpperCase()
     );
     if (!student) return [];
 
@@ -744,7 +863,7 @@ class DatabaseService {
 
   async toggleEventRegistration(eventId, studentId, studentName, studentClass, studentSection, studentHouse) {
     if (this.isCloud) {
-      const { data: existing } = await supabase.from('event_registrations').select('*').eq('event_id', eventId).eq('student_id', studentId).single();
+      const { data: existing } = await supabase.from('event_registrations').select('*').eq('event_id', eventId).eq('student_id', studentId).maybeSingle();
 
       if (existing) {
         await supabase.from('event_registrations').delete().eq('id', existing.id);
@@ -791,7 +910,7 @@ class DatabaseService {
 
   async isStudentRegistered(eventId, studentId) {
     if (this.isCloud) {
-      const { data } = await supabase.from('event_registrations').select('id').eq('event_id', eventId).eq('student_id', studentId).single();
+      const { data } = await supabase.from('event_registrations').select('id').eq('event_id', eventId).eq('student_id', studentId).maybeSingle();
       return Boolean(data);
     }
     this.reload();
@@ -865,8 +984,13 @@ class DatabaseService {
   // GETTERS (SUPABASE & LOCALSTORAGE DUAL SUPPORT)
   async getAllStudents() {
     if (this.isCloud) {
-      const { data } = await supabase.from('students').select('*');
-      return (data || []).map(s => ({
+      let { data } = await supabase.from('students').select('*');
+      if (!data || data.length === 0) {
+        await this.seedSupabaseIfEmpty();
+        const res = await supabase.from('students').select('*');
+        data = res.data || [];
+      }
+      return data.map(s => ({
         studentRecordNo: s.student_record_no,
         name: s.name,
         class: s.class,
@@ -892,8 +1016,13 @@ class DatabaseService {
 
   async getAllTeachers() {
     if (this.isCloud) {
-      const { data } = await supabase.from('teachers').select('*');
-      return (data || []).map(t => ({
+      let { data } = await supabase.from('teachers').select('*');
+      if (!data || data.length === 0) {
+        await this.seedSupabaseIfEmpty();
+        const res = await supabase.from('teachers').select('*');
+        data = res.data || [];
+      }
+      return data.map(t => ({
         teacherRecordNo: t.teacher_record_no,
         name: t.name,
         department: t.department,
@@ -912,8 +1041,13 @@ class DatabaseService {
 
   async getAllCredentials() {
     if (this.isCloud) {
-      const { data } = await supabase.from('credentials').select('*');
-      return (data || []).map(c => ({
+      let { data } = await supabase.from('credentials').select('*');
+      if (!data || data.length === 0) {
+        await this.seedSupabaseIfEmpty();
+        const res = await supabase.from('credentials').select('*');
+        data = res.data || [];
+      }
+      return data.map(c => ({
         recordNo: c.record_no,
         personName: c.person_name,
         role: c.role,
@@ -950,8 +1084,12 @@ class DatabaseService {
 
   async getAdminAccount() {
     if (this.isCloud) {
-      const { data } = await supabase.from('admin_account').select('*').limit(1).single();
-      return data || { id: 'ADM-001', password: 'admin123' };
+      const { data } = await supabase.from('admin_account').select('*').maybeSingle();
+      if (!data) {
+        await this.seedSupabaseIfEmpty();
+        return { id: 'ADM-001', password: 'admin123' };
+      }
+      return data;
     }
     this.reload();
     return this.db.adminAccount;
