@@ -17,6 +17,7 @@ import {
   Award
 } from 'lucide-react';
 import { dbService } from '../services/db';
+import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 
 export default function StudentInbox({ currentUser }) {
   const [inboxMessages, setInboxMessages] = useState([]);
@@ -24,26 +25,40 @@ export default function StudentInbox({ currentUser }) {
   const [registrationState, setRegistrationState] = useState({});
 
   useEffect(() => {
+    let isMounted = true;
     if (currentUser && currentUser.role === 'student') {
       loadInbox();
+
+      if (isSupabaseConfigured && supabase) {
+        const channel = supabase
+          .channel('public:messages')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
+            if (isMounted) loadInbox();
+          })
+          .subscribe();
+
+        return () => {
+          supabase.removeChannel(channel);
+        };
+      }
     }
   }, [currentUser]);
 
-  const loadInbox = () => {
-    const msgs = dbService.getStudentInbox(currentUser.id);
+  const loadInbox = async () => {
+    const msgs = await dbService.getStudentInbox(currentUser.id);
     setInboxMessages(msgs);
 
     const regMap = {};
-    msgs.forEach(msg => {
+    for (const msg of msgs) {
       if (msg.category === 'event') {
-        regMap[msg.id] = dbService.isStudentRegistered(msg.id, currentUser.id);
+        regMap[msg.id] = await dbService.isStudentRegistered(msg.id, currentUser.id);
       }
-    });
+    }
     setRegistrationState(regMap);
   };
 
-  const handleToggleRegistration = (eventId) => {
-    const result = dbService.toggleEventRegistration(
+  const handleToggleRegistration = async (eventId) => {
+    const result = await dbService.toggleEventRegistration(
       eventId, 
       currentUser.id, 
       currentUser.name,

@@ -52,22 +52,25 @@ export default function AdminPortal({ onOpenUserApp }) {
     }
   }, [isAdminLoggedIn, activeTab, credentialModal]);
 
-  const loadData = () => {
-    setStudents(dbService.getAllStudents());
-    setTeachers(dbService.getAllTeachers());
-    setCredentials(dbService.getAllCredentials());
+  const loadData = async () => {
+    const s = await dbService.getAllStudents();
+    const t = await dbService.getAllTeachers();
+    const c = await dbService.getAllCredentials();
+    setStudents(s);
+    setTeachers(t);
+    setCredentials(c);
 
-    const adm = dbService.getAdminAccount();
+    const adm = await dbService.getAdminAccount();
     if (adm) {
       setNewAdminId(adm.id);
       setNewAdminPass(adm.password);
     }
   };
 
-  const handleAdminLogin = (e) => {
+  const handleAdminLogin = async (e) => {
     e.preventDefault();
     setLoginError('');
-    const res = dbService.adminLogin(adminIdInput, adminPassInput);
+    const res = await dbService.adminLogin(adminIdInput, adminPassInput);
     if (res.success) {
       setIsAdminLoggedIn(true);
     } else {
@@ -80,10 +83,10 @@ export default function AdminPortal({ onOpenUserApp }) {
     setAdminPassInput('');
   };
 
-  const handleUpdateAdminCredentials = (e) => {
+  const handleUpdateAdminCredentials = async (e) => {
     e.preventDefault();
     setSettingsMsg(null);
-    const res = dbService.updateAdminCredentials(newAdminId, newAdminPass);
+    const res = await dbService.updateAdminCredentials(newAdminId, newAdminPass);
     if (res.success) {
       setSettingsMsg({ type: 'success', message: res.message });
       setAdminIdInput(newAdminId);
@@ -93,8 +96,8 @@ export default function AdminPortal({ onOpenUserApp }) {
     }
   };
 
-  const handleGenerateStudentCreds = (recordNo) => {
-    const res = dbService.generateStudentCredentials(recordNo);
+  const handleGenerateStudentCreds = async (recordNo) => {
+    const res = await dbService.generateStudentCredentials(recordNo);
     if (res.success) {
       setCredentialModal({
         personName: res.student.name,
@@ -107,8 +110,8 @@ export default function AdminPortal({ onOpenUserApp }) {
     }
   };
 
-  const handleGenerateTeacherCreds = (recordNo) => {
-    const res = dbService.generateTeacherCredentials(recordNo);
+  const handleGenerateTeacherCreds = async (recordNo) => {
+    const res = await dbService.generateTeacherCredentials(recordNo);
     if (res.success) {
       setCredentialModal({
         personName: res.teacher.name,
@@ -121,9 +124,9 @@ export default function AdminPortal({ onOpenUserApp }) {
     }
   };
 
-  const handleRegenerateConfirm = () => {
+  const handleRegenerateConfirm = async () => {
     if (!regenerateConfirm) return;
-    const res = dbService.regenerateStudentCredentials(regenerateConfirm);
+    const res = await dbService.generateStudentCredentials(regenerateConfirm);
     if (res.success) {
       setCredentialModal({
         personName: res.student.name,

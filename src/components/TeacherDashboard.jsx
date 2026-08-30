@@ -44,23 +44,34 @@ export default function TeacherDashboard({ currentUser, onBroadcastSent }) {
   const [activeEventRegistrations, setActiveEventRegistrations] = useState(null);
 
   useEffect(() => {
-    const filters = {
-      classes: selectedClasses,
-      sections: selectedSections,
-      streams: selectedStreams,
-      houses: selectedHouses,
-      optionalSubject: selectedOptionalSubject,
-      isSchoolWide
+    let isMounted = true;
+    const updateMatch = async () => {
+      const filters = {
+        classes: selectedClasses,
+        sections: selectedSections,
+        streams: selectedStreams,
+        houses: selectedHouses,
+        optionalSubject: selectedOptionalSubject,
+        isSchoolWide
+      };
+      const res = await dbService.calculateMatchingStudents(filters);
+      if (isMounted) setMatchInfo(res);
     };
-    const res = dbService.calculateMatchingStudents(filters);
-    setMatchInfo(res);
+    updateMatch();
+    return () => { isMounted = false; };
   }, [selectedClasses, selectedSections, selectedStreams, selectedHouses, selectedOptionalSubject, isSchoolWide]);
 
   useEffect(() => {
-    if (currentUser) {
-      const history = dbService.getAllMessages().filter(m => m.senderId === currentUser.id || currentUser.role === 'admin');
-      setSentHistory(history);
-    }
+    let isMounted = true;
+    const fetchHistory = async () => {
+      if (currentUser) {
+        const msgs = await dbService.getAllMessages();
+        const history = msgs.filter(m => m.senderId === currentUser.id || currentUser.role === 'admin');
+        if (isMounted) setSentHistory(history);
+      }
+    };
+    fetchHistory();
+    return () => { isMounted = false; };
   }, [currentUser, activeTab, sendSuccess]);
 
   const toggleArrayItem = (array, setArray, item) => {
@@ -71,7 +82,7 @@ export default function TeacherDashboard({ currentUser, onBroadcastSent }) {
     }
   };
 
-  const handleSendBroadcast = (e) => {
+  const handleSendBroadcast = async (e) => {
     e.preventDefault();
     if (!title.trim() || !content.trim()) {
       alert('Please fill in both title and message details.');
@@ -96,15 +107,13 @@ export default function TeacherDashboard({ currentUser, onBroadcastSent }) {
       }
     };
 
-    setTimeout(() => {
-      const result = dbService.sendBroadcast(currentUser, messageData);
-      setIsSending(false);
-      if (result.success) {
-        setSendSuccess(result);
-        if (onBroadcastSent) onBroadcastSent(result.message);
-        setTimeout(() => setSendSuccess(null), 5000);
-      }
-    }, 300);
+    const result = await dbService.sendBroadcast(currentUser, messageData);
+    setIsSending(false);
+    if (result.success) {
+      setSendSuccess(result);
+      if (onBroadcastSent) onBroadcastSent(result.message);
+      setTimeout(() => setSendSuccess(null), 5000);
+    }
   };
 
   return (

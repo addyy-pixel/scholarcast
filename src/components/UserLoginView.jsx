@@ -14,7 +14,7 @@ export default function UserLoginView({ onAuthSuccess }) {
     setAnimationStarted(true);
   }, []);
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
     setSuccess('');
@@ -24,7 +24,7 @@ export default function UserLoginView({ onAuthSuccess }) {
       return;
     }
 
-    const res = dbService.loginWithRoleDetection(idInput, passwordInput);
+    const res = await dbService.loginWithRoleDetection(idInput, passwordInput);
     if (res.success) {
       if (res.role === 'admin') {
         setError('Admin logins are not allowed on the CampusCast User App. Please use the Admin Portal.');
