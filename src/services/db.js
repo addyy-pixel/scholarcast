@@ -996,6 +996,165 @@ class DatabaseService {
   }
 
   // --- EXCEL IMPORT & EXPORT ---
+  async importFromExcel(fileArrayBuffer) {
+    try {
+      const wb = XLSX.read(fileArrayBuffer, { type: 'array' });
+      const errors = [];
+
+      if (wb.SheetNames.includes('STUDENTS')) {
+        const rawStudents = XLSX.utils.sheet_to_json(wb.Sheets['STUDENTS']);
+        const importedStudents = [];
+
+        rawStudents.forEach((row, idx) => {
+          const lineNo = idx + 2;
+          const name = row['Student Name'] || row['name'];
+          if (!name) {
+            errors.push(`Row ${lineNo}: Missing Student Name.`);
+            return;
+          }
+          const cls = String(row['Class'] || row['class'] || '');
+          if (!OFFICIAL_CLASSES.includes(cls)) {
+            errors.push(`Row ${lineNo} (${name}): Invalid Class "${cls}". Must be 9, 10, 11, or 12.`);
+          }
+          const sec = String(row['Section'] || row['section'] || '');
+          if (!OFFICIAL_SECTIONS.includes(sec)) {
+            errors.push(`Row ${lineNo} (${name}): Invalid Section "${sec}". Must be A/B, C, D/E, or F.`);
+          }
+          const opt1 = row['Optional Subject 1'] || row['optionalSubject1'] || '';
+          const opt2 = row['Optional Subject 2'] || row['optionalSubject2'] || '';
+          if (opt1 && opt2 && opt1 === opt2) {
+            errors.push(`Row ${lineNo} (${name}): Optional Subjects 1 & 2 cannot be identical ("${opt1}").`);
+          }
+
+          importedStudents.push({
+            studentRecordNo: row['Student Record No.'] || row['studentRecordNo'] || `STU-${1000 + idx + 1}`,
+            name,
+            class: cls,
+            section: sec,
+            stream: row['Stream'] || 'General',
+            house: row['House'] || 'Vikram',
+            subject1: row['Subject 1'] || 'English',
+            subject2: row['Subject 2'] || '',
+            subject3: row['Subject 3'] || '',
+            subject4: row['Subject 4'] || '',
+            subject5: row['Subject 5'] || '',
+            optionalSubject1: opt1,
+            optionalSubject2: opt2,
+            credentialStatus: row['Credential Status'] || 'Not Generated',
+            accountStatus: row['Account Status'] || 'Active',
+            generatedId: row['Generated ID'] || row['generatedId'] || '',
+            generatedPassword: row['Generated Password'] || row['generatedPassword'] || ''
+          });
+        });
+
+        if (errors.length > 0) return { success: false, errors };
+
+        if (this.isCloud) {
+          for (const s of importedStudents) {
+            await supabase.from('students').upsert({
+              student_record_no: s.studentRecordNo,
+              name: s.name,
+              class: s.class,
+              section: s.section,
+              stream: s.stream,
+              house: s.house,
+              subject1: s.subject1,
+              subject2: s.subject2,
+              subject3: s.subject3,
+              subject4: s.subject4,
+              subject5: s.subject5,
+              optional_subject1: s.optionalSubject1,
+              optional_subject2: s.optionalSubject2,
+              credential_status: s.credentialStatus,
+              account_status: s.accountStatus,
+              generated_id: s.generatedId,
+              generated_password: s.generatedPassword
+            });
+
+            if (s.generatedId && s.generatedPassword) {
+              await supabase.from('credentials').upsert({
+                generated_id: s.generatedId,
+                record_no: s.studentRecordNo,
+                person_name: s.name,
+                role: 'Student',
+                generated_password: s.generatedPassword,
+                generated_on: new Date().toISOString(),
+                status: 'Active'
+              });
+            }
+          }
+        } else {
+          this.db.students = importedStudents;
+          this.saveLocal();
+        }
+      }
+
+      if (wb.SheetNames.includes('TEACHERS')) {
+        const rawTeachers = XLSX.utils.sheet_to_json(wb.Sheets['TEACHERS']);
+        const importedTeachers = [];
+
+        rawTeachers.forEach((row, idx) => {
+          const name = row['Teacher Name'] || row['name'];
+          if (!name) return;
+
+          const tRecordNo = row['Teacher Record No.'] || row['teacherRecordNo'] || `TCH-${2000 + idx + 1}`;
+          const subjectsTaught = typeof row['Subjects Taught'] === 'string' ? row['Subjects Taught'].split(',').map(s => s.trim()) : (row['subjectsTaught'] || []);
+          const authorizedClasses = typeof row['Authorized Classes'] === 'string' ? row['Authorized Classes'].split(',').map(c => c.trim()) : (row['authorizedClasses'] || []);
+          const authorizedSections = typeof row['Authorized Sections'] === 'string' ? row['Authorized Sections'].split(',').map(s => s.trim()) : (row['authorizedSections'] || []);
+
+          importedTeachers.push({
+            teacherRecordNo: tRecordNo,
+            name,
+            department: row['Department'] || 'General',
+            subjectsTaught,
+            authorizedClasses,
+            authorizedSections,
+            credentialStatus: row['Credential Status'] || 'Not Generated',
+            accountStatus: row['Account Status'] || 'Active',
+            generatedId: row['Generated ID'] || row['generatedId'] || '',
+            generatedPassword: row['Generated Password'] || row['generatedPassword'] || ''
+          });
+        });
+
+        if (this.isCloud) {
+          for (const t of importedTeachers) {
+            await supabase.from('teachers').upsert({
+              teacher_record_no: t.teacherRecordNo,
+              name: t.name,
+              department: t.department,
+              subjects_taught: t.subjectsTaught,
+              authorized_classes: t.authorizedClasses,
+              authorized_sections: t.authorizedSections,
+              credential_status: t.credentialStatus,
+              account_status: t.accountStatus,
+              generated_id: t.generatedId,
+              generated_password: t.generatedPassword
+            });
+
+            if (t.generatedId && t.generatedPassword) {
+              await supabase.from('credentials').upsert({
+                generated_id: t.generatedId,
+                record_no: t.teacherRecordNo,
+                person_name: t.name,
+                role: 'Teacher',
+                generated_password: t.generatedPassword,
+                generated_on: new Date().toISOString(),
+                status: 'Active'
+              });
+            }
+          }
+        } else {
+          this.db.teachers = importedTeachers;
+          this.saveLocal();
+        }
+      }
+
+      return { success: true, message: 'CampusCast_Data.xlsx imported and synced with Supabase successfully!' };
+    } catch (err) {
+      return { success: false, errors: [`Failed to parse Excel workbook: ${err.message}`] };
+    }
+  }
+
   async exportToExcel() {
     const students = await this.getAllStudents();
     const teachers = await this.getAllTeachers();

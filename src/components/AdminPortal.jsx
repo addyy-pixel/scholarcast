@@ -162,12 +162,12 @@ export default function AdminPortal({ onOpenUserApp }) {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       const buffer = evt.target.result;
-      const res = dbService.importFromExcel(buffer);
+      const res = await dbService.importFromExcel(buffer);
       if (res.success) {
         setExcelImportStatus({ success: true, message: res.message });
-        loadData();
+        await loadData();
       } else {
         setExcelImportStatus({ success: false, errors: res.errors });
       }
